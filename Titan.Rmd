@@ -1,0 +1,305 @@
+---
+title: "Titanic"
+author: "forecast"
+date: "4/16/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+titantrain <- read.csv('train.csv')
+titantest <- read.csv('test.csv')
+
+titantest['Survived'] = NA
+fulltitan <- rbind(titantrain, titantest)
+
+```
+
+
+```{r}
+fulltitan$Survived <- factor(fulltitan$Survived)
+fulltitan$Pclass <- factor(fulltitan$Pclass)
+fulltitan$Name <- as.character(fulltitan$Name)
+fulltitan$Ticket <- as.character(fulltitan$Ticket)
+
+```
+
+
+```{r} 
+#EDA
+
+summary(fulltitan)
+
+
+#Age has 263 missing values
+#Fare has 1 missing value  DONE
+#Cabin has 1014 missing values, notice its just a black observation and would need to be replaced with 'NA'
+#Embarked also has 2 missing 
+ 
+```
+
+
+
+```{r} 
+#FARE
+#we need to replace missing values.
+fulltitan %>% filter(is.na(Fare))
+
+
+fulltitan %>% filter(Fare == '0')
+#some 17 people didn't pay. And they are all male. Perhaps they worked in the ship?
+
+fulltitan %>% group_by(Pclass) %>% 
+  summarise(ave = mean(Fare, na.rm = TRUE))
+
+fulltitan %>% group_by(Embarked) %>% 
+  summarise(ave = mean(Fare, na.rm = TRUE))
+# a man in his 60s, in test set so we do not know if he survived, Embarked in S. Well, Average price in S is 27.4 But One could have embarked from S but be in any of the Pclasses. Average price of classes range from 13.3 in class 3 to 87.5 in first class. Best to just impute the average Fare price. 
+
+fulltitan$Fare <- ifelse(is.na(fulltitan$Fare), 
+                         mean(fulltitan$Fare, na.rm = TRUE), fulltitan$Fare)
+
+```
+
+
+```{r} 
+#EMBARKED
+fulltitan %>% filter(Embarked == '')
+
+#2 females with no Embarkation point but in the same cabin and Class. Moreover, both also survived and have same ticket.  
+fulltitan %>% group_by(Pclass, Embarked) %>% count()
+#More in S and C , S>C
+
+fulltitan %>% group_by(Survived, Embarked) %>% count()
+# more in S survived
+
+# I am going to replace missin Embarkation points with S
+fulltitan$Embarked <- as.character(fulltitan$Embarked)
+fulltitan$Embarked <- ifelse(fulltitan$Embarked == '',
+                             'S', 
+                             fulltitan$Embarked)
+
+fulltitan$Embarked <- factor(fulltitan$Embarked, 
+                             levels = c('S', 'C', 'Q'))
+```
+
+
+```{r} 
+#CABIN
+
+#cabin has so many missing. I will assume these people didnt have a cabin. 
+fulltitan$Cabin <- as.character(fulltitan$Cabin)
+fulltitan$Cabin <- ifelse(fulltitan$Cabin == '', 
+                          'no_cabin', 
+                          fulltitan$Cabin)
+
+#proximity to each other might mean they died/survived together like the 2 females initally without embarkation point. So Going to create another column with first letter of cabin
+
+#SAME TICKET = SAME CABIN
+same_tickets <- fulltitan %>% group_by(Ticket,Cabin) %>% count() %>% filter(n >1)
+same_tickets['Helper'] <- 'H'
+same_tickets <- same_tickets[-c(2,3)]
+
+
+fulltitan$Cabin <- ifelse(fulltitan$Ticket == 'PC 17757' & is.na(fulltitan$Cabin), 
+                          'C62', fulltitan$Cabin)
+fulltitan$Cabin <- ifelse(fulltitan$Ticket == '36928' & is.na(fulltitan$Cabin), 
+                          'C7', fulltitan$Cabin)
+fulltitan$Cabin <- ifelse(fulltitan$Ticket == '113781' & is.na(fulltitan$Cabin), 
+                          'C22', fulltitan$Cabin)
+fulltitan$Cabin <- ifelse(fulltitan$Ticket == 'PC 17757' & is.na(fulltitan$Cabin), 
+                          'C62', fulltitan$Cabin)
+
+
+
+
+fulltitan <- fulltitan %>% mutate(Area = ifelse(fulltitan$Cabin != 'no_cabin',  str_sub(fulltitan$Cabin, 1, 1), 'No room')) #we now have an idea of where they were
+
+
+```
+
+
+```{r}
+#Age
+pp <- fulltitan %>% filter(is.na(fulltitan$Age)) #subset people without age
+pp %>% group_by(Pclass) %>% count() #majority are in class 3
+pp %>% group_by(Embarked) %>% count() #majority embarked via S
+
+fulltitan %>% group_by(Pclass) %>% summarise(age = mean(Age, na.rm = TRUE)) #mean age by class
+                           
+# I will inpute age based on Class, there seems to be better difference
+fulltitan$Age <- ifelse(is.na(fulltitan$Age) & 
+                          fulltitan$Pclass == '1', 39.2, fulltitan$Age)
+fulltitan$Age <- ifelse(is.na(fulltitan$Age) & 
+                          fulltitan$Pclass == '2', 29.5, fulltitan$Age)
+fulltitan$Age <- ifelse(is.na(fulltitan$Age) & 
+                          fulltitan$Pclass == '3', 24.8, fulltitan$Age)
+
+fulltitan <- fulltitan[-c(11)]
+fulltitan <- left_join(fulltitan, 
+                       same_tickets, by = 'Ticket')
+fulltitan <- fulltitan[-c(9)]
+
+
+fulltitan$Helper <- ifelse(is.na(fulltitan$Helper), 
+                           'N', 
+                           fulltitan$Helper)
+#H is someone with a helper, N is no immediate helper
+
+fulltitan <- fulltitan %>% mutate(
+  family_size = Parch + 1 + SibSp)
+#now we need drop Parch and SibSp to prevent collinearity
+fulltitan <- fulltitan[-c(7,8)]
+ 
+```
+
+
+
+
+
+```{r}
+#FARE
+ggplot(data = fulltitan, aes(x = Fare)) + geom_histogram(binwidth = 50)
+#age is right skewed. Let's try using its log to create a normal distribution
+
+
+fulltitan$Fare <- log10(fulltitan$Fare) #note all 0 fares are changed to infinity. We need make sure they are 0
+
+fulltitan$Fare <- ifelse(fulltitan$Fare == '-Inf', 0, fulltitan$Fare)
+
+```
+
+
+```{r}
+#Age
+
+age_groups <- c(0,6,18,65,80)
+
+fulltitan['Age_Group'] <- cut(fulltitan$Age, breaks = age_groups, 
+                              labels = c('Infant', 'Child', 'Adult', 'Senior'))
+
+#Drop Age 
+
+fulltitan <- fulltitan[-c(6)]
+
+```
+
+
+```{r}
+fulltitan['Names'] <- str_sub(fulltitan$Name, str_locate(fulltitan$Name, ",")[ , 1] + 2, 
+                              str_locate(fulltitan$Name, "\\.")[ , 1] - 1)
+
+#can also use gsub()
+
+
+fulltitan <- fulltitan[-c(4)]
+
+fulltitan$Names <- factor(fulltitan$Names)
+
+honorables <- c('Capt', 'Col', 'Dr', 'Major', 'Master', 'Rev', 'Sir', 'Jonkheer', 'Lady', 'the Countess')
+regular_males <- c('Don', 'Mr')
+regular_females <- c('Ms', 'Miss', 'Dona', 'Mlle', 'Mme', 'Mrs')
+
+fulltitan['titles'] <- ifelse(fulltitan$Names %in% honorables, 'Elite', 'Regular')
+
+fulltitan <- fulltitan[-c(11)]
+fulltitan$Area <- factor(fulltitan$Area)
+fulltitan$Helper <- factor(fulltitan$Helper)
+fulltitan$titles <- factor(fulltitan$titles)
+```
+
+
+```{r}
+titantrain <- fulltitan[1:901, ]
+
+titantest <- fulltitan[902: 1324, ]
+titantest <- titantest[-c(2)]
+```
+
+
+```{r}
+#logisticregression
+
+#klas <- glm(Survived ~  Pclass + Sex  + Embarked + Area + Helper + family_size + Age_Group + titles, family = 'binomial',  data = titantrain)
+#titan %>% count(SibSp, Survived) #those with less siblings most likely survived
+#titantest$Pclass <- factor(titantest$Pclass)
+#pred <- predict(klas, type = 'response', newdata = titantest)
+#pred <- ifelse(pred < 0.5, 0, 1)
+
+#pred <- c(pred)
+
+
+#install.packages('randomForest')
+
+#titantest$Survived <- pred
+#final <- titantest[c(1,12)]
+```
+
+```{r} 
+ #best submission RANDOM FOREST
+library(randomForest)
+
+
+classifier <- randomForest(x =  titantrain[c(3,4,5,6,7,8,9,10,11)],
+                           y = titantrain$Survived, ntree =  2000)
+
+assifier <-  randomForest(x =  titantrain[c(3,4,5,7,9)], 
+                          y = titantrain$Survived, ntree =  500)
+
+importance(classifier)
+library(modelr)
+titantest <- titantest %>% add_predictions(assifier)
+
+y_pred <- predict(classifier, newdata = titantest)
+titantest <- titantest[c(1,11)]
+colnames(titantest) <- c('PassengerId', 'Survived')
+
+
+write.csv(titantest, 'randomtitan.csv', col.names = TRUE)
+
+```
+
+
+```{r}
+
+
+
+titantrain <- data.frame(titantrain)
+wow <- data.matrix(titantrain[-c(1,2)])
+
+titantrain$Survived <- as.numeric(as.character(titantrain$Survived))
+
+mmm <- xgboost(data = wow,
+               label = titantrain$Survived,
+               nrounds = 25,
+               params = list(
+                 objective = 'binary:logistic'
+               ))
+
+
+zzz <- titantest
+
+zzz <- zzz[-c(1)]
+
+zzz <- data.frame(zzz)
+
+zzz <- data.matrix(zzz)
+
+final <- predict(mmm, zzz)
+
+titantest['Survived'] = final
+
+titantest$Survived <- ifelse(titantest$Survived < 0.5,
+                             0, 
+                             1)
+
+titantest <- titantest[c(1,11)]
+
+titantest <- unique(titantest)
+
+write.csv(titantest, 'randomtitan.csv', col.names = TRUE)
+
+```
