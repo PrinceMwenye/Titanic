@@ -1,2 +1,2 @@
 # Titanic Dataset Kaggle
-Solution to Titanic Dataset
+Testing Machine Learning. Solution to Titanic dataset. 
